@@ -1,0 +1,17 @@
+# config.yml
+name_space: 'teacher_resnet20_cifar100'
+batch_size: 128
+input_size: 32
+train_dir: '../data'
+test_dir: '../data'
+max_epochs: 400
+checkpoint_dir: 'logs'
+num_classes: 100
+is_distributed: true
+is_transfer: true
+mixed: 'bf16'
+arch: 'resnet20'
+learning_rate: 0.1
+smoothing: 0.1
+data_type: 'CIFAR100'
+width_mult: 1

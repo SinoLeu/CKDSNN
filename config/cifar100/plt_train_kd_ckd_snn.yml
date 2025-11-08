@@ -1,0 +1,31 @@
+# config.yml
+name_space: 'ckd_resnet19_cifar100'
+batch_size: 128
+input_size: 32
+train_dir: '/home/h666/code-acm/data'
+test_dir: '/home/h666/code-acm/data'
+max_epochs: 400
+checkpoint_dir: 'logs'
+num_classes: 100
+is_distributed: true
+is_transfer: true
+mixed: '16-mixed'
+arch: 'resnet19'
+# arch: 'resnet20'
+# learning_rate: 0.1
+learning_rate: 0.05
+smoothing: 0.1
+data_type: 'CIFAR100'
+# width_mult: 8
+width_mult: 8
+# resnet19_cifar100_CAM_data_CIFAR100.h5
+# resnet19_cifar10_CAM_data_CIFAR10.h5
+cam_path: 'resnet19_cifar100_CAM_data_CIFAR100.h5'
+hyper_cam: 1.0
+noise_weight: 0.9
+top_k: 50
+kd_weight: 1.1
+smoothing: 0.1
+pre_trained_tea_path: 'pre_trained_ann_model/resnet19_CIFAR100.pth'
+# pre_trained_tea_path: 'pre_trained_ann_model/resnet20_CIFAR100.pth'
+T: 1
