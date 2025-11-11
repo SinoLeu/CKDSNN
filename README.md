@@ -3,7 +3,7 @@
 <div align="center"><h1>&nbsp;A Closer Look at Knowledge Distillation in Spiking Neural Network Training</h1></div>
 
 <p align="center">
-| <a href="http://arxiv.org/pdf/2407.09083"><b>Paper</b></a> | <a href="http://arxiv.org/pdf/2407.09083"><b>Blog</b></a> |
+| <a href="https://arxiv.org/abs/2511.06902"><b>Paper</b></a> | <a href="https://arxiv.org/abs/2511.06902"><b>Blog</b></a> |
 </p>
 
 <p align="center">
