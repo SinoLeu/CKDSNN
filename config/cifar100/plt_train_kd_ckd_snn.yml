@@ -13,7 +13,7 @@ mixed: '16-mixed'
 arch: 'resnet19'
 # arch: 'resnet20'
 # learning_rate: 0.1
-learning_rate: 0.05
+learning_rate: 0.1
 smoothing: 0.1
 data_type: 'CIFAR100'
 # width_mult: 8

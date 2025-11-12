@@ -612,7 +612,7 @@ def soft_loss_smooth(student_logits,teacher_logits, temperature=2.0,noise_weight
     # 计算交叉熵损失
     kl_loss = F.kl_div(soft_student_outputs.log(), soft_targets, reduction='batchmean') * (temperature ** 2)
     
-    return kl_loss,compute_entropy(soft_student_outputs)
+    return kl_loss
 
 
 def _get_gt_mask(logits, target):

@@ -121,7 +121,7 @@ def load_combinenet_model(args):
     state_dict = torch.load(args.pre_trained_tea_path, map_location=torch.device('cpu'))
     
     net.load_state_dict(state_dict['state_dict'])
-    freeze_model_parameters(net)
+    # freeze_model_parameters(net)
     return net
 
 def sample_roi_from_prob(images, activate_map, labels, num_rois=5, roi_size=(32, 32)):
@@ -183,8 +183,38 @@ def sample_roi_from_prob(images, activate_map, labels, num_rois=5, roi_size=(32,
 
     return roi_images, roi_labels
 
+def compute_cam_with_grad(feature_maps,gradients):
+    """
+    Compute Grad-CAM using backpropagated gradients.
+    
+    Args:
+        feature_maps: Tensor of shape (B, D, H, W)
+        class_weights: Tensor of shape (C, D) 
+        predicted_classes: Tensor of shape (B,)
+        gradients: Tensor of shape (B, D, H, W) -> ∂y_pred/∂feature_maps
+
+    Returns:
+        cam_img: Tensor of shape (B, H, W), values normalized to [0, 1]
+    """
+    B, D, H, W = feature_maps.shape
+
+    # Step 1: Global average pooling of gradients to get channel importance weights
+    # (B, D, H, W) -> (B, D)
+    weights = torch.nn.functional.adaptive_avg_pool2d(gradients, (1, 1)).view(B, D)
+
+    # Step 2: Weighted sum over channels
+    # (B, D, H, W) * (B, D, 1, 1) -> (B, H, W)
+    cams = (feature_maps * weights.view(B, D, 1, 1)).sum(dim=1)  # (B, H, W)
+
+    # Step 3: ReLU + normalize to [0, 1]
+    cams = torch.relu(cams)
+    cams = cams - cams.min(dim=-1, keepdim=True)[0].min(dim=-2, keepdim=True)[0]  # per-sample min
+    cams = cams / (cams.max(dim=-1, keepdim=True)[0].max(dim=-2, keepdim=True)[0] + 1e-8)
+
+    return cams
 
 
+# compute cam for last feature map
 def compute_cam(feature_maps, class_weights, predicted_classes):
     """
     Args:
@@ -210,48 +240,59 @@ def compute_cam(feature_maps, class_weights, predicted_classes):
         # 激活值归一化处理
     cam = cam - cam.min()  # 确保非负
     cam_img = cam / (cam.max() + 1e-3)  # 归一化到 [0, 1]
-    # Step 4: 归一化到 [0, 1]
-    # cam_mins = cams.view(B, -1).min(dim=1, keepdim=True)[0].view(B, 1, 1)
-    # cam_maxs = cams.view(B, -1).max(dim=1, keepdim=True)[0].view(B, 1, 1)
-    # cams = (cams - cam_mins) / (cam_maxs - cam_mins + 1e-8)
-
-    # Step 5: 上采样到指定尺寸 (使用 interpolate)
-    # cams = cams.unsqueeze(1)  # shape: (B, 1, H, W)
-    # cams = F.interpolate(cams, size=size_upsample, mode='bilinear', align_corners=False)
-    # cams = cams.squeeze(1)  # shape: (B, H_up, W_up)
-
+    
     return cam_img
 
+import torch
 
-def compute_entropy(logits, is_temporal=False):
+def forward_with_gradients(
+    model,
+    inputs,
+    target_classes=None,
+    # return_feature_map=True,
+    feature_layer_index=-1
+):
     """
-    计算输出 logits 的熵。
-    
-    参数：
-        logits: Tensor，形状为 [batch_size, num_classes]（非时序）或 [batch_size, timesteps, num_classes]（时序）。
-        is_temporal: bool，是否为时序数据（SNN）。
-    
-    返回：
-        entropy: 标量，平均熵值。
-    """
-    # 转换为概率分布
-    prob = torch.softmax(logits, dim=-1)  # 沿类别维度 softmax
-    
-    # 避免 log(0)，添加小常数
-    prob = prob + 1e-10
-    
-    # 计算熵：-sum(p * log(p))
-    entropy = -torch.sum(prob * torch.log(prob), dim=-1)  # 形状为 [batch_size] 或 [batch_size, timesteps]
-    
-    if is_temporal:
-        # 时序数据：对时间步和批量取平均
-        entropy = entropy.mean(dim=[0, 1])  # 平均熵，标量
-    else:
-        # 非时序数据：对批量取平均
-        entropy = entropy.mean(dim=0)  # 平均熵，标量
-    
-    return entropy.item()
+    Compute gradients of target class scores w.r.t. the last (or specified) feature map
+    for Grad-CAM.
 
+    Args:
+        model (nn.Module): Model that supports return_inter=True to output intermediate features.
+        inputs (Tensor): Input batch of shape (B, C, H_in, W_in).
+        target_classes (Tensor, optional): Long tensor of shape (B,). 
+            If None, uses argmax of model output (i.e., predicted classes).
+        return_feature_map (bool): If True, also return the detached feature map.
+        feature_layer_index (int): Index into the list of intermediate features (default: -1 for last).
+
+    Returns:
+        gradients (Tensor): Shape (B, D, H, W), gradients w.r.t. feature map.
+        feature_map (Tensor, optional): Shape (B, D, H, W), detached feature map.
+    """
+    model.eval()  # Ensure batchnorm/dropout behave deterministically
+    with torch.enable_grad():
+        model.train()  # 或 eval()，但不能有 no_grad
+        outputs, features = model(inputs, return_inter=True)
+        feature_map = features[feature_layer_index]  # (B, D, H, W)
+        # print("feature_map.requires_grad:", feature_map.requires_grad)
+        # print("feature_map has grad_fn:", feature_map.grad_fn is not None)
+        if target_classes is None:
+            target_classes = outputs.argmax(dim=1)  # (B,)
+
+        # Gather target class logits
+        batch_size = outputs.size(0)
+        target_scores = outputs[torch.arange(batch_size), target_classes]  # (B,)
+
+        # Compute gradients
+        grads = torch.autograd.grad(
+            outputs=target_scores.sum(),
+            inputs=feature_map,
+            retain_graph=True,
+            create_graph=False        
+        )[0]
+
+    return grads, outputs, feature_map.detach()
+
+    
 
 class LitModel(pl.LightningModule):
     def __init__(self,args=None):
@@ -263,25 +304,12 @@ class LitModel(pl.LightningModule):
         self.learning_rate = args.learning_rate
         self.num_classes = args.num_classes
         self.criterion = nn.CrossEntropyLoss()
-        # self.criterion = LabelSmoothingCrossEntropy(smoothing=args.smoothing) 
         self.noise_weight = args.noise_weight
-        # self.top_k = args.top_k
         self.kd_weight = args.kd_weight
-        # self.bkd_criterion = BKDLoss(teacher_channels=512, student_channels=512, lambda_mgd=0.15, alpha_mgd=7e-4, use_clip=False)
         
-        # self.lif =  neuron.LIFNode(step_mode='m')
-        # self.feature_extractor = create_qk_former(args)
-        # if args.name == 'resformer':
-        #     self.feature_extractor = create_resformer(args)
-        # elif args.name == 'qkformer':
-        #     self.feature_extractor = create_qk_former(args)
-        # sew_resnet19(num_classes=10, width_mult=8, connect_f='ADD',T=1) connect_f='ADD'
-        # self.feature_extractor = snn_resnet19(num_classes=args.num_classes, width_mult=args.width_mult,T=args.T)
         self.feature_extractor = snn_resnet19(num_classes=args.num_classes, width_mult=args.width_mult,T=args.T)
         print(self.feature_extractor)
         self.teacher = load_combinenet_model(args)
-        # self.teacher = resnet19(num_classes=args.num_classes,width_mult=args.width_mult)
-        ### load teacher model checkpoint
         
         self.crop_size = args.input_size
         self.hyper_cam = args.hyper_cam
@@ -293,42 +321,34 @@ class LitModel(pl.LightningModule):
         return x
     
     def training_step(self, batch):
-        # batch = batchs['image']
-        # gt = batchs['label']
         batch, gt = batch[0], batch[1]
-        # grad_cam = batchs['gradcam']
-        
+
         out,mid_out_s = self.forward(batch,return_inter=True)
         mid_spike = mid_out_s[-1].permute(1, 0, 2, 3, 4)
-        # print(mid_spike)
+
         stu_predicted_class = out.argmax(dim=1)
         stu_class_weights = self.feature_extractor.fc1.weight.data
         spike_activate_map = compute_cam(mid_spike.mean(0), stu_class_weights, stu_predicted_class)
 
-        # spike_activate_map = getForwardCAM(mid_spike).unsqueeze(1)
         
-        # layer3_out_fire_rate = F.interpolate(spike_activate_map, size=(self.crop_size, self.crop_size), mode='bilinear', align_corners=False)
-        out_t,feat = self.teacher(batch,return_inter=True)
-        # bkd_loss = self.bkd_criterion(mid_spike.mean(0),feat[-1])
-        feature_map = feat[-1]
-        predicted_class = out_t.argmax(dim=1)
-        class_weights = self.teacher.linear.weight.data  # shape: (num_classes, D)  7e-4*bkd_loss 
-        grad_cam = compute_cam(feature_map, class_weights, predicted_class)
-        # print(spike_activate_map)
+        # out_t,feat = self.teacher(batch,return_inter=True)
+        ## with no grad cam / class activate by last class weights
+        # feature_map = feat[-1]
+        # predicted_class = out_t.argmax(dim=1)
+        # class_weights = self.teacher.linear.weight.data  # shape: (num_classes, D)  7e-4*bkd_loss 
+        # grad_cam = compute_cam(feature_map, class_weights, predicted_class)
+        
+        ## use grad cam with gradients
+        grads, out_t, feature_map = forward_with_gradients(self.teacher, batch)
+        grad_cam = compute_cam_with_grad(feature_map, grads)
+        
+        
         l3 = compute_kl_divergence(spike_activate_map, grad_cam, Tau=2.0)
-        #  + 14.5*l3
-        #  + soft_loss_smooth(out,out_t,noise_weight=self.noise_weight) + 0.01*l3
-        # + 0.01*l3 + soft_loss_smooth(out,out_t,noise_weight=self.noise_weight)
-        # + 0.001*l3+ 0.01*l3 + soft_loss_smooth(out,out_t,noise_weight=self.noise_weight)
-        # 0.01*
-        noise_loss,stu_noise_ent =  soft_loss_smooth(out,out_t,noise_weight=self.noise_weight,temperature=2.0)
+        
+        noise_loss =  soft_loss_smooth(out,out_t,noise_weight=self.noise_weight,temperature=2.0)
         loss =  self.criterion(out, gt)  + l3 + noise_loss
         acc = calculate_accuracy(out, gt)
-        ## compute the self.teacher.average entropy
-        teacher_entropy = compute_entropy(out_t/2, is_temporal=False)
-        student_entropy = compute_entropy(out/2, is_temporal=False)
-        self.log("train/teacher_entropy", teacher_entropy)
-        self.log("train/student_entropy", stu_noise_ent)
+
         self.log("train/loss", loss)
         self.log("train/acc", acc)
         # functional.reset_net(self.feature_extractor)
@@ -381,13 +401,7 @@ class LitModel(pl.LightningModule):
             #  lr=1e-4,
             weight_decay=1e-4
         )
-        # scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        #     optimizer, 
-        #     mode='min', 
-        #     patience=3, 
-        #     factor=0.5, 
-        #     verbose=True
-        # )
+        
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, eta_min=0, T_max=self.max_epoch)
         return {
             'optimizer': optimizer,
@@ -410,8 +424,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Parse YAML config and optionally print content')
     parser.add_argument('--print-yaml', action='store_true', help='Print raw YAML content')
     parser.add_argument('--config', default='config/ckd/plt_train_kd_ckd_snn.yml', help='Path to YAML config file')
-    # args = parse_args_yml('config/nabrids/plt_our_kdtrain_snn_nabrids.yml')
-    # plt_erkdtrain_snn_nabrids.yml
+    
     args = parser.parse_args()
     if args.print_yaml:
         print_yaml_content(args.config)

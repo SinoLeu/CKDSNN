@@ -188,10 +188,6 @@ def resnet19(pretrained=False, progress=True, **kwargs):
 def resnet20(pretrained=False, progress=True, **kwargs):
     return _resnet('resnet20', PreActBasicBlock, [3, 3, 3], pretrained, progress, **kwargs)
 
-def resnet19_last_w_relu(pretrained=False, progress=True, **kwargs):
-    pass
-#     return _resnet_last_w_relu('resnet19', PreActBasicBlock, [3, 3, 2], pretrained, progress, **kwargs)
-
 
 # def sew_resnet19(pretrained=False, progress=True, **kwargs):
 #     return _sew_resnet('resnet19', SEWBasicBlock, [3, 3, 2], pretrained, progress, **kwargs)
