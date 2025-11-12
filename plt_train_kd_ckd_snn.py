@@ -69,24 +69,6 @@ def remove_module_from_state_dict(state_dict):
 
 
 
-class CombineNet(nn.Module):
-    """Combined network with ResNet backbone and MultiStageFeatureModule."""
-    def __init__(self, model, stage_module):
-        super().__init__()
-        self.model = model
-        self.da_module = stage_module
-
-    def forward(self, x):
-        # [stage1,stage2,stage3,stage4] = base_model.forward_intermediates
-        # _, feat = self.model.forward_intermediates(x)
-        y1 = self.model(x)
-        # print(feat[1].shape,feat[2].shape,feat[3].shape)
-        # formatted_feat = feat[1:]
-        # out_tea = self.da_module(formatted_feat)
-        # out_stu = self.da_module(spike_features)
-        # return y1,out_tea,out_stu
-        return y1
-
 
 def calculate_accuracy(outputs, targets):
     """
@@ -123,65 +105,6 @@ def load_combinenet_model(args):
     net.load_state_dict(state_dict['state_dict'])
     # freeze_model_parameters(net)
     return net
-
-def sample_roi_from_prob(images, activate_map, labels, num_rois=5, roi_size=(32, 32)):
-    """
-    Args:
-        images: Tensor of shape (b, c, h, w)
-        activate_map: Tensor of shape (b, 1, h, w)
-        labels: Tensor of shape (b,) or (b, num_classes)
-        num_rois: number of ROIs to sample per image
-        roi_size: size of each ROI (height, width)
-
-    Returns:
-        roi_images: Tensor of shape (b*num_rois, c, roi_h, roi_w)
-        roi_labels: Tensor of shape (b*num_rois,) or (b*num_rois, num_classes)
-    """
-    b, _, h, w = activate_map.shape
-    device = activate_map.device
-
-    # Flatten and normalize activation map
-    prob = activate_map.view(b, -1)
-    prob = prob / (prob.sum(dim=1, keepdim=True) + 1e-8)
-
-    # Sample pixel positions
-    sampler = torch.distributions.Categorical(prob)
-    sampled_indices = sampler.sample(sample_shape=(num_rois,)).T  # (b, num_rois)
-
-    # Convert to coordinates
-    ys = sampled_indices // w
-    xs = sampled_indices % w
-
-    # Create boxes [x1, y1, x2, y2]
-    roi_size_half_h = roi_size[0] // 2
-    roi_size_half_w = roi_size[1] // 2
-
-    x1 = (xs - roi_size_half_w).clamp(0, w)
-    y1 = (ys - roi_size_half_h).clamp(0, h)
-    x2 = (xs + roi_size_half_w).clamp(0, w)
-    y2 = (ys + roi_size_half_h).clamp(0, h)
-
-    rois = torch.stack([x1, y1, x2, y2], dim=-1).float()  # (b, num_rois, 4)
-
-    # Add batch indices for roi_align
-    batch_indices = torch.arange(b, device=device).repeat_interleave(num_rois).view(-1, 1)
-    rois = rois.view(-1, 4)
-    rois = torch.cat([batch_indices, rois], dim=1)  # (b*num_rois, 5)
-
-    # Extract ROI images
-    roi_images = ops.roi_align(images, rois, output_size=roi_size)
-
-    # Replicate labels
-    if labels.dim() == 1:
-        # For class indices: (b,) -> (b*num_rois,)
-        roi_labels = labels.repeat_interleave(num_rois)
-    elif labels.dim() == 2:
-        # For one-hot or multi-label: (b, num_classes) -> (b*num_rois, num_classes)
-        roi_labels = labels.unsqueeze(1).repeat(1, num_rois, 1).view(-1, labels.size(1))
-    else:
-        raise ValueError("Labels must be 1D or 2D")
-
-    return roi_images, roi_labels
 
 def compute_cam_with_grad(feature_maps,gradients):
     """
@@ -445,8 +368,6 @@ def main():
     )
 
     dm = PlDataModule(batch_size=args.batch_size, train_dir=args.train_dir, test_dir=args.test_dir, data_type=args.data_type)
-    # dm = PlDataModule(batch_size=args.batch_size, train_dir=args.train_dir, test_dir=args.test_dir, crop_size=args.input_size)
-    # set fc layer of model with exact class number of current dataset
     model = LitModel(args=args)
     
     if args.is_distributed:
@@ -460,4 +381,3 @@ if __name__ == "__main__":
     main()
 
 ## nohup python3 plt_train_kd_ckd_snn.py --config config/cifar100/plt_train_kd_ckd_snn.yml &
-## python3 
