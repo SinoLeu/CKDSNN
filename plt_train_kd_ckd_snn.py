@@ -330,17 +330,16 @@ class LitModel(pl.LightningModule):
         stu_class_weights = self.feature_extractor.fc1.weight.data
         spike_activate_map = compute_cam(mid_spike.mean(0), stu_class_weights, stu_predicted_class)
 
+        # with no grad cam / class activate by last class weights
+        out_t,feat = self.teacher(batch,return_inter=True)
+        feature_map = feat[-1]
+        predicted_class = out_t.argmax(dim=1)
+        class_weights = self.teacher.linear.weight.data  # shape: (num_classes, D)  7e-4*bkd_loss 
+        grad_cam = compute_cam(feature_map, class_weights, predicted_class)
         
-        # out_t,feat = self.teacher(batch,return_inter=True)
-        ## with no grad cam / class activate by last class weights
-        # feature_map = feat[-1]
-        # predicted_class = out_t.argmax(dim=1)
-        # class_weights = self.teacher.linear.weight.data  # shape: (num_classes, D)  7e-4*bkd_loss 
-        # grad_cam = compute_cam(feature_map, class_weights, predicted_class)
-        
-        ## use grad cam with gradients
-        grads, out_t, feature_map = forward_with_gradients(self.teacher, batch)
-        grad_cam = compute_cam_with_grad(feature_map, grads)
+        ## use grad cam with gradients / class activate by backprop gradients
+        # grads, out_t, feature_map = forward_with_gradients(self.teacher, batch)
+        # grad_cam = compute_cam_with_grad(feature_map, grads)
         
         
         l3 = compute_kl_divergence(spike_activate_map, grad_cam, Tau=2.0)
