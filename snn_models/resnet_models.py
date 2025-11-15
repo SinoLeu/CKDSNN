@@ -106,7 +106,8 @@ class ResNet(nn.Module):
         self.layer2 = self._make_layer(block, self.inplanes * 2, layers[1], stride=2, mode=mode)
         self.layer3 = self._make_layer(block, self.inplanes * 2, layers[2], stride=2, mode=mode, is_last_layer=True)
         self.avgpool = tdLayer(nn.AdaptiveAvgPool2d((1, 1)))
-        self.fc1 = nn.Linear(self.inplanes, num_classes)
+        self.fc2 = nn.Linear(self.inplanes, 256)
+        self.fc1 = nn.Linear(256, num_classes)
         self.T = T
         self.add_dim = lambda x: add_dimention(x, self.T)
 
@@ -146,6 +147,7 @@ class ResNet(nn.Module):
         x = self.avgpool(x)
         x = torch.flatten(x, 1) if len(x.shape) == 4 else torch.flatten(x, 2)
         x = x.mean(1).squeeze(1)
+        x = self.fc2(x)
         y = self.fc1(x)
         if return_inter:
             return y, mid_features
