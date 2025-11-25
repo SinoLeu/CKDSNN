@@ -247,11 +247,11 @@ class LitModel(pl.LightningModule):
         batch, gt = batch[0], batch[1]
 
         out,mid_out_s = self.forward(batch,return_inter=True)
-        mid_spike = mid_out_s[-1].permute(1, 0, 2, 3, 4)
+        mid_spike = mid_out_s[-1]
+        # from utils.utils import getForwardCAM
+        spike_activate_map = getForwardCAM(mid_spike)
 
-        stu_predicted_class = out.argmax(dim=1)
-        stu_class_weights = self.feature_extractor.fc1.weight.data
-        spike_activate_map = compute_cam(mid_spike.mean(0), stu_class_weights, stu_predicted_class)
+        
 
         # with no grad cam / class activate by last class weights
         out_t,feat = self.teacher(batch,return_inter=True)
