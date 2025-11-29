@@ -247,7 +247,7 @@ class LitModel(pl.LightningModule):
         batch, gt = batch[0], batch[1]
 
         out,mid_out_s = self.forward(batch,return_inter=True)
-        mid_spike = mid_out_s[-1]
+        mid_spike = mid_out_s[-1].permute(1, 0, 2, 3, 4)
         # from utils.utils import getForwardCAM
         spike_activate_map = getForwardCAM(mid_spike)
 
